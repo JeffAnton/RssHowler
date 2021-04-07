@@ -43,7 +43,8 @@ import org.w3c.dom.NamedNodeMap;
 // create table podcasts (guid text primary key, url text, title text, feed text);
 // create table feeds (rssurl text primary key,
 //			last bigint default 0 not null,
-//			flags smallint default 0 not null);
+//			flags smallint default 0 not null,
+//			etag text);
 
 // feed table flags
 //
@@ -65,7 +66,7 @@ class rsshowler {
 
     static DocumentBuilderFactory factory;
     static Connection dbconn;
-    static String useragent = "RssHowler/0.9";
+    static String useragent = "RssHowler/1.0";
 
     public static void
     main(String argv[]) {
@@ -219,12 +220,19 @@ class rsshowler {
     }
 
     static void
-    updatelast(String url, long t) {
+    updatelast(String url, long t, String etag) {
 	try {
-	    PreparedStatement st = dbconn.prepareStatement(
-		"update feeds set last = ? where rssurl = ?");
+	    String up = "update feeds set last = ? where rssurl = ?";
+	    if (etag != null)
+		up = "update feeds set last = ?, etag = ? where rssurl = ?";
+	    PreparedStatement st = dbconn.prepareStatement(up);
 	    st.setLong(1, t);
-	    st.setString(2, url);
+	    if (etag != null) {
+		st.setString(2, etag);
+		st.setString(3, url);
+	    } else {		
+		st.setString(2, url);
+	    }
 	    int r = st.executeUpdate();
 	    System.out.println("updated feed " + url + " at time " + t);
 	} catch (SQLException e) {
@@ -241,33 +249,35 @@ class rsshowler {
 		// look for feeds and run them...
 		Statement st = dbconn.createStatement();
 		ResultSet r = st.executeQuery(
-	"select rssurl, last, flags from feeds where flags > 0 order by 1");
+    "select rssurl, last, flags, etag from feeds where flags > 0 order by 1");
 		while (r.next()) {
 		    long now = System.currentTimeMillis();
-		    String url = r.getString(1);
-		    if (dofetch(url, r.getLong(2), r.getShort(3)) == 0)
-			updatelast(url, now);
+		    dofetch(r.getString(1), r.getLong(2), r.getShort(3),
+			now, r.getString(4));
 		}
 		st.close();
 	    } catch (SQLException e) {
 		System.out.println("Database connection problems " + e.getMessage());
 	    }
 	} else {
-	    dofetch(arg, 0, 1);
+	    dofetch(arg, 0, 1, 0, null);
 	}
     }
 
     static int
-    dofetch(String arg, long t, int flags) {
+    dofetch(String arg, long t, int flags, long n, String etag) {
 	System.out.println("dofetch " + arg);
 	int ret = 1;
 	try {
 	    DocumentBuilder builder = factory.newDocumentBuilder();
 	    URLConnection uc = new URL(arg).openConnection();
-	    if (t > 0)
+	    if (etag != null) {
+		uc.setRequestProperty("If-None-Match", etag);
+	    } else if (t > 0) {
 		uc.setIfModifiedSince(t);
-	    uc.setAllowUserInteraction(false);
+	    }
 	    uc.setRequestProperty("User-Agent", useragent);
+	    uc.setAllowUserInteraction(false);
 	    uc.connect();
 	    String status = uc.getHeaderField(null);
 	    if (!status.contains(" 304 ")) {
@@ -287,6 +297,8 @@ class rsshowler {
 	    l = uc.getHeaderField("ETag");
 	    if (l != null)
 		System.out.println("ETag " + l);
+	    if (ret == 0 && n > 0)
+		updatelast(arg, n, l);
 	} catch (MalformedURLException e) {
 	    System.out.println("Bad URL Form:" + arg);
 	} catch (IOException i) {
