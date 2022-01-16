@@ -1,6 +1,7 @@
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLConnection;
+import java.net.HttpURLConnection;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.File;
@@ -48,6 +49,7 @@ import org.w3c.dom.NamedNodeMap;
 
 // feed table flags
 //
+// negative values ignored
 // 0 (no bits) - do nothing with this feed - just remember it
 // 1 - download feed
 // 2 - update podcasts table with feed items
@@ -57,6 +59,7 @@ import org.w3c.dom.NamedNodeMap;
 // 7 (1 & 2 & 4) normal download with filename correction
 // 8 - do not download feeds but do update podcasts table - to skip old items
 // 11 (1 & 2 & 8) update podcasts table without downloading
+// 16 - HEAD operation only to check for working URLs
 
 // adding a feed example
 // sql insert
@@ -66,7 +69,7 @@ class rsshowler {
 
     static DocumentBuilderFactory factory;
     static Connection dbconn;
-    static String useragent = "RssHowler/1.0";
+    static String useragent = "RssHowler/1.1";
 
     public static void
     main(String argv[]) {
@@ -204,16 +207,20 @@ class rsshowler {
 	try {
 	    URLConnection uc = new URL(url).openConnection();
 	    uc.setAllowUserInteraction(false);
+	    if ((flags & 16) == 16)
+		((HttpURLConnection)uc).setRequestMethod("HEAD");
 	    uc.setRequestProperty("User-Agent", useragent);
 	    uc.connect();
 	    InputStream i = uc.getInputStream();
-	    OutputStream o = new FileOutputStream(p);
-	    byte[] b = new byte[20480];
-	    int br;
-	    while ((br = i.read(b)) > 0)
-		o.write(b, 0, br);
+	    if ((flags & 16) == 0) {
+		OutputStream o = new FileOutputStream(p);
+		byte[] b = new byte[20480];
+		int br;
+		while ((br = i.read(b)) > 0)
+		    o.write(b, 0, br);
+		o.close();
+	    }
 	    i.close();
-	    o.close();
 	} catch (Exception e) {
 	    e.printStackTrace();
 	}
