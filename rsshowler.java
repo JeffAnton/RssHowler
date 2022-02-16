@@ -27,7 +27,7 @@ import org.w3c.dom.NamedNodeMap;
 //
 // A simple database driven podcast downloader
 //
-// Copyright 2021 Jeff Anton
+// Copyright 2022 Jeff Anton
 // See LICENSE file
 // Check github.com for JeffAnton/RssHowler
 
@@ -60,6 +60,7 @@ import org.w3c.dom.NamedNodeMap;
 // 8 - do not download feeds but do update podcasts table - to skip old items
 // 11 (1 & 2 & 8) update podcasts table without downloading
 // 16 - HEAD operation only to check for working URLs
+// 32 - Always fetch feed
 
 // adding a feed example
 // sql insert
@@ -69,7 +70,7 @@ class rsshowler {
 
     static DocumentBuilderFactory factory;
     static Connection dbconn;
-    static String useragent = "RssHowler/1.1";
+    static String useragent = "RssHowler/1.3";
 
     public static void
     main(String argv[]) {
@@ -129,9 +130,9 @@ class rsshowler {
 		if (dbconn == null) {
 		    System.out.println(title + ":guid=" + guid + ":url=" + url + ":feed=" + feed);
 		} else {
-		    if ((flags & 2) == 2 &&
-			    addpodcast(guid, url, title, feed) == 1)
-			dosave(url, feed, flags);
+		    if ((flags & 2) == 2 && checkpodcast(guid) == 0 &&
+			    dosave(url, feed, flags))
+			addpodcast(guid, url, title, feed);
 		}
 	}
     }
@@ -181,11 +182,11 @@ class rsshowler {
 	return c;
     }
 
-    static void
+    static boolean
     dosave(String url, String feed, int flags) {
 	// 8 flag means do not save
 	if ((flags & 8) == 8)
-	    return;
+	    return true;	// true because we're accepting
 	int q = url.indexOf('?');
 	String f = url;
 	if (q == -1) {
@@ -196,7 +197,8 @@ class rsshowler {
 	    f = url.substring(s+1, q);
 	}
 	File d = new File(feed);
-	d.mkdir();
+	if ((flags & 16) != 16)
+	    d.mkdir();
 	File p = new File(d, f);
 	if ((flags & 4) == 4 || p.exists()) {
 	    // need to choose a different name
@@ -221,9 +223,11 @@ class rsshowler {
 		o.close();
 	    }
 	    i.close();
+	    return true;
 	} catch (Exception e) {
 	    e.printStackTrace();
 	}
+	return false;
     }
 
     static void
@@ -277,19 +281,26 @@ class rsshowler {
 	int ret = 1;
 	try {
 	    DocumentBuilder builder = factory.newDocumentBuilder();
-	    URLConnection uc = new URL(arg).openConnection();
-	    if (etag != null) {
-		uc.setRequestProperty("If-None-Match", etag);
-	    } else if (t > 0) {
-		uc.setIfModifiedSince(t);
+	    HttpURLConnection uc =
+		(HttpURLConnection)new URL(arg).openConnection();
+	    uc.setInstanceFollowRedirects(false);
+	    if ((flags & 32) != 32) {
+		if (etag != null) {
+		    uc.setRequestProperty("If-None-Match", etag);
+		} else if (t > 0) {
+		    uc.setIfModifiedSince(t);
+		}
 	    }
 	    uc.setRequestProperty("User-Agent", useragent);
 	    uc.setAllowUserInteraction(false);
 	    uc.connect();
-	    String status = uc.getHeaderField(null);
-	    if (!status.contains(" 304 ")) {
-		if (!status.contains(" 200 "))
-		    System.out.println("Status: " + status);
+	    int status = uc.getResponseCode();
+	    if (status != 200) {
+		System.out.println("Status: " + status);
+		String loc = uc.getHeaderField("Location");
+		if (loc != null)
+		    System.out.println("Location: " + loc);
+	    } else {
 		Element doc =
 		    builder.parse(uc.getInputStream()).getDocumentElement();
 		workfeed(doc, flags);
