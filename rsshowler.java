@@ -70,7 +70,7 @@ class rsshowler {
 
     static DocumentBuilderFactory factory;
     static Connection dbconn;
-    static String useragent = "RssHowler/1.3";
+    static String useragent = "RssHowler/1.4";
 
     public static void
     main(String argv[]) {
@@ -252,6 +252,33 @@ class rsshowler {
     }
 
     static void
+    deadfeed(String url) {
+	try {
+	    String up = "update feeds set flags = 0 where rssurl = ?";
+	    PreparedStatement st = dbconn.prepareStatement(up);
+	    st.setString(1, url);
+	    int r = st.executeUpdate();
+	    System.out.println("dead feed " + url);
+	} catch (SQLException e) {
+	    System.out.println("dead feed fail " + e.getMessage());
+	}
+    }
+
+    static void
+    movefeed(String url, String newurl) {
+	try {
+	    String up = "update feeds set rssurl = ? where rssurl = ?";
+	    PreparedStatement st = dbconn.prepareStatement(up);
+	    st.setString(1, newurl);
+	    st.setString(2, url);
+	    int r = st.executeUpdate();
+	    System.out.println("move feed " + url + " to " + newurl);
+	} catch (SQLException e) {
+	    System.out.println("move feed fail " + e.getMessage());
+	}
+    }
+
+    static void
     doarg(String arg) {
 	if (arg.startsWith("jdbc")) {
 	    // setup database
@@ -295,16 +322,26 @@ class rsshowler {
 	    uc.setAllowUserInteraction(false);
 	    uc.connect();
 	    int status = uc.getResponseCode();
-	    if (status != 200) {
-		System.out.println("Status: " + status);
-		String loc = uc.getHeaderField("Location");
-		if (loc != null)
-		    System.out.println("Location: " + loc);
-	    } else {
+	    if (status == 200) {
 		Element doc =
 		    builder.parse(uc.getInputStream()).getDocumentElement();
 		workfeed(doc, flags);
 		ret = 0;
+	    } else if (status == 410) {
+		// feed is dead... clear flags
+		System.out.println("Status: " + status + " FEED IS DEAD");
+		deadfeed(arg);
+	    } else {
+		System.out.println("Status: " + status);
+		String loc = uc.getHeaderField("Location");
+		if (loc != null)
+		    System.out.println("Location: " + loc);
+		if (status == 301) {
+		    // feed is moved...
+		    System.out.println("FEED MOVED");
+		    movefeed(arg, loc);
+		    return dofetch(loc, t, flags, n, etag);
+		}
 	    }
 	    String l = uc.getHeaderField("Last-Modified");
 	    if (l != null)
