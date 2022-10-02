@@ -70,7 +70,7 @@ class rsshowler {
 
     static DocumentBuilderFactory factory;
     static Connection dbconn;
-    static String useragent = "RssHowler/1.4";
+    static String useragent = "RssHowler/1.6";
 
     public static void
     main(String argv[]) {
@@ -207,12 +207,20 @@ class rsshowler {
 	}
 	System.out.println("file " + p.getPath());
 	try {
-	    URLConnection uc = new URL(url).openConnection();
+	    HttpURLConnection uc =
+		(HttpURLConnection)new URL(url).openConnection();
 	    uc.setAllowUserInteraction(false);
 	    if ((flags & 16) == 16)
-		((HttpURLConnection)uc).setRequestMethod("HEAD");
+		uc.setRequestMethod("HEAD");
 	    uc.setRequestProperty("User-Agent", useragent);
 	    uc.connect();
+	    int status = uc.getResponseCode();
+	    if (status != 200) {
+		System.out.println("Unexpected Item Status: " + status);
+		String loc = uc.getHeaderField("Location");
+		if (loc != null)
+		    System.out.println("Location: " + loc);
+	    }
 	    InputStream i = uc.getInputStream();
 	    if ((flags & 16) == 0) {
 		OutputStream o = new FileOutputStream(p);
@@ -245,6 +253,7 @@ class rsshowler {
 		st.setString(2, url);
 	    }
 	    int r = st.executeUpdate();
+	    st.close();
 	    System.out.println("updated feed " + url + " at time " + t);
 	} catch (SQLException e) {
 	    System.out.println("update feed fail " + e.getMessage());
@@ -258,6 +267,7 @@ class rsshowler {
 	    PreparedStatement st = dbconn.prepareStatement(up);
 	    st.setString(1, url);
 	    int r = st.executeUpdate();
+	    st.close();
 	    System.out.println("dead feed " + url);
 	} catch (SQLException e) {
 	    System.out.println("dead feed fail " + e.getMessage());
@@ -272,6 +282,7 @@ class rsshowler {
 	    st.setString(1, newurl);
 	    st.setString(2, url);
 	    int r = st.executeUpdate();
+	    st.close();
 	    System.out.println("move feed " + url + " to " + newurl);
 	} catch (SQLException e) {
 	    System.out.println("move feed fail " + e.getMessage());
@@ -284,6 +295,7 @@ class rsshowler {
 	    // setup database
 	    try {
 		dbconn = DriverManager.getConnection(arg);
+		dbconn.setAutoCommit(true);
 		// look for feeds and run them...
 		Statement st = dbconn.createStatement();
 		ResultSet r = st.executeQuery(
