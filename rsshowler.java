@@ -218,8 +218,26 @@ class rsshowler {
 	    if (status != 200) {
 		System.out.println("Unexpected Item Status: " + status);
 		String loc = uc.getHeaderField("Location");
-		if (loc != null)
+		if (loc != null) {
 		    System.out.println("Location: " + loc);
+		    if (status == 301 && loc != url) {
+			// guess we have to do this ourselves...
+			uc.disconnect();
+			uc = (HttpURLConnection)new URL(loc).openConnection();
+			uc.setAllowUserInteraction(false);
+			if ((flags & 16) == 16)
+			    uc.setRequestMethod("HEAD");
+			uc.setRequestProperty("User-Agent", useragent);
+			uc.connect();
+			status = uc.getResponseCode();
+			if (status != 200) {
+			    System.out.println("Second Unexpected Item Status: " + status);
+			    loc = uc.getHeaderField("Location");
+			    if (loc != null)
+				System.out.println("Location: " + loc);
+			}
+		    }
+		}
 	    }
 	    InputStream i = uc.getInputStream();
 	    if ((flags & 16) == 0) {
