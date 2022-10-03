@@ -104,7 +104,7 @@ class rsshowler {
 	reporttag(e, "skipDays");
 	reporttag(e, "skipHours");
 	NodeList tlist = e.getElementsByTagName("title");
-	String feed = tlist.item(0).getTextContent();
+	String feed = tlist.item(0).getTextContent().trim();
 	NodeList items = e.getElementsByTagName("item");
 	for (int i = 0; i < items.getLength(); ++i) {
 	    Node item = items.item(i);
@@ -117,13 +117,13 @@ class rsshowler {
 		Node f = il.item(j);
 		String nn = f.getNodeName();
 		if (nn.equals("guid")) {
-		    guid = f.getTextContent();
+		    guid = f.getTextContent().trim();
 		} else if (nn.equals("enclosure")) {
 		    NamedNodeMap n = f.getAttributes();
 		    Node u = n.getNamedItem("url");
 		    url = u.getNodeValue();
 		} else if (nn.equals("title")) {
-		    title = f.getTextContent();
+		    title = f.getTextContent().trim();
 		}
 	    }
 	    if (guid != null && url != null && title != null)
