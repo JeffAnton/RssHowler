@@ -70,7 +70,7 @@ class rsshowler {
 
     static DocumentBuilderFactory factory;
     static Connection dbconn;
-    static String useragent = "RssHowler/1.6";
+    static String useragent = "RssHowler/1.7";
 
     public static void
     main(String argv[]) {
@@ -220,7 +220,7 @@ class rsshowler {
 		String loc = uc.getHeaderField("Location");
 		if (loc != null) {
 		    System.out.println("Location: " + loc);
-		    if (status == 301 && loc != url) {
+		    if (status == 301 && loc.equals(url) == false) {
 			// guess we have to do this ourselves...
 			uc.disconnect();
 			uc = (HttpURLConnection)new URL(loc).openConnection();
@@ -357,20 +357,21 @@ class rsshowler {
 		    builder.parse(uc.getInputStream()).getDocumentElement();
 		workfeed(doc, flags);
 		ret = 0;
-	    } else if (status == 410) {
+	    } else if (status == 410 || status == 404) {
 		// feed is dead... clear flags
 		System.out.println("Status: " + status + " FEED IS DEAD");
 		deadfeed(arg);
 	    } else {
 		System.out.println("Status: " + status);
 		String loc = uc.getHeaderField("Location");
-		if (loc != null)
+		if (loc != null && loc.equals(arg) == false) {
 		    System.out.println("Location: " + loc);
-		if (status == 301) {
-		    // feed is moved...
-		    System.out.println("FEED MOVED");
-		    movefeed(arg, loc);
-		    return dofetch(loc, t, flags, n, etag);
+		    if (status >= 301 && status <= 309) {
+			// feed is moved...
+			System.out.println("FEED MOVED");
+			movefeed(arg, loc);
+			return dofetch(loc, t, flags, n, etag);
+		    }
 		}
 	    }
 	    String l = uc.getHeaderField("Last-Modified");
