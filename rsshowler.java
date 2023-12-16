@@ -27,7 +27,7 @@ import org.w3c.dom.NamedNodeMap;
 //
 // A simple database driven podcast downloader
 //
-// Copyright 2022 Jeff Anton
+// Copyright 2022, 2023 Jeff Anton
 // See LICENSE file
 // Check github.com for JeffAnton/RssHowler
 
@@ -70,7 +70,7 @@ class rsshowler {
 
     static DocumentBuilderFactory factory;
     static Connection dbconn;
-    static String useragent = "RssHowler/1.7";
+    static String useragent = "RssHowler/1.8";
 
     public static void
     main(String argv[]) {
@@ -105,6 +105,7 @@ class rsshowler {
 	reporttag(e, "skipHours");
 	NodeList tlist = e.getElementsByTagName("title");
 	String feed = tlist.item(0).getTextContent().trim();
+	System.out.println("Scaning feed " + feed);
 	NodeList items = e.getElementsByTagName("item");
 	for (int i = 0; i < items.getLength(); ++i) {
 	    Node item = items.item(i);
@@ -196,6 +197,13 @@ class rsshowler {
 	    int s = url.lastIndexOf('/', q);
 	    f = url.substring(s+1, q);
 	}
+	q = feed.indexOf(": ");
+	if (q == -1)
+	    q = feed.indexOf(" - ");
+	if (q == -1)
+	    q = feed.indexOf(" | ");
+	if (q != -1)
+	    feed = feed.substring(0, q);
 	File d = new File(feed);
 	if ((flags & 16) != 16)
 	    d.mkdir();
@@ -259,17 +267,11 @@ class rsshowler {
     static void
     updatelast(String url, long t, String etag) {
 	try {
-	    String up = "update feeds set last = ? where rssurl = ?";
-	    if (etag != null)
-		up = "update feeds set last = ?, etag = ? where rssurl = ?";
+	    String up = "update feeds set last = ?, etag = ? where rssurl = ?";
 	    PreparedStatement st = dbconn.prepareStatement(up);
 	    st.setLong(1, t);
-	    if (etag != null) {
-		st.setString(2, etag);
-		st.setString(3, url);
-	    } else {		
-		st.setString(2, url);
-	    }
+	    st.setString(2, etag);
+	    st.setString(3, url);
 	    int r = st.executeUpdate();
 	    st.close();
 	    System.out.println("updated feed " + url + " at time " + t);
