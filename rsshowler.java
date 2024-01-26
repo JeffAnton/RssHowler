@@ -27,7 +27,7 @@ import org.w3c.dom.NamedNodeMap;
 //
 // A simple database driven podcast downloader
 //
-// Copyright 2022, 2023 Jeff Anton
+// Copyright 2022, 2024 Jeff Anton
 // See LICENSE file
 // Check github.com for JeffAnton/RssHowler
 
@@ -70,7 +70,7 @@ class rsshowler {
 
     static DocumentBuilderFactory factory;
     static Connection dbconn;
-    static String useragent = "RssHowler/1.8";
+    static String useragent = "RssHowler/1.9";
 
     public static void
     main(String argv[]) {
@@ -89,7 +89,7 @@ class rsshowler {
 	}
     }
 
-    static void
+    static boolean
     workfeed(Element e, int flags) {
 	/*
 	  follow rss/channel/
@@ -103,6 +103,7 @@ class rsshowler {
 	reporttag(e, "ttl");
 	reporttag(e, "skipDays");
 	reporttag(e, "skipHours");
+	boolean ret = true;
 	NodeList tlist = e.getElementsByTagName("title");
 	String feed = tlist.item(0).getTextContent().trim();
 	System.out.println("Scaning feed " + feed);
@@ -131,11 +132,15 @@ class rsshowler {
 		if (dbconn == null) {
 		    System.out.println(title + ":guid=" + guid + ":url=" + url + ":feed=" + feed);
 		} else {
-		    if ((flags & 2) == 2 && checkpodcast(guid) == 0 &&
-			    dosave(url, feed, flags))
-			addpodcast(guid, url, title, feed);
+		    if ((flags & 2) == 2 && checkpodcast(guid) == 0)
+			if (dosave(url, feed, flags)) {
+			    addpodcast(guid, url, title, feed);
+			} else {
+			    ret = false;
+			}
 		}
 	}
+	return ret;
     }
 
     static void
@@ -197,11 +202,14 @@ class rsshowler {
 	    int s = url.lastIndexOf('/', q);
 	    f = url.substring(s+1, q);
 	}
+	// Grrrr... Work around trend of adding feed comments in title
 	q = feed.indexOf(": ");
 	if (q == -1)
 	    q = feed.indexOf(" - ");
 	if (q == -1)
 	    q = feed.indexOf(" | ");
+	if (q == -1)
+	    q = feed.indexOf(" (");
 	if (q != -1)
 	    feed = feed.substring(0, q);
 	File d = new File(feed);
@@ -210,6 +218,11 @@ class rsshowler {
 	File p = new File(d, f);
 	if ((flags & 4) == 4 || p.exists()) {
 	    // need to choose a different name
+	    int e = f.lastIndexOf('.');
+	    if (e > -1)
+		f = f.substring(e);
+	    else
+		f = "";
 	    f = System.currentTimeMillis() + f;
 	    p = new File(d, f);
 	}
@@ -357,8 +370,8 @@ class rsshowler {
 	    if (status == 200) {
 		Element doc =
 		    builder.parse(uc.getInputStream()).getDocumentElement();
-		workfeed(doc, flags);
-		ret = 0;
+		if (workfeed(doc, flags))
+		    ret = 0;
 	    } else if (status == 410 || status == 404) {
 		// feed is dead... clear flags
 		System.out.println("Status: " + status + " FEED IS DEAD");
