@@ -7,6 +7,8 @@ import java.io.OutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -61,6 +63,7 @@ import org.w3c.dom.NamedNodeMap;
 // 11 (1 & 2 & 8) update podcasts table without downloading
 // 16 - HEAD operation only to check for working URLs
 // 32 - Always fetch feed
+// 64 - prepend date to filename if possible
 
 // adding a feed example
 // sql insert
@@ -70,7 +73,7 @@ class rsshowler {
 
     static DocumentBuilderFactory factory;
     static Connection dbconn;
-    static String useragent = "RssHowler/1.9";
+    static String useragent = "RssHowler/2.1";
 
     public static void
     main(String argv[]) {
@@ -111,10 +114,10 @@ class rsshowler {
 	for (int i = 0; i < items.getLength(); ++i) {
 	    Node item = items.item(i);
 	    NodeList il = item.getChildNodes();
-	    String guid, url, title;
-	    guid = null;
-	    url = null;
-	    title = null;
+	    String guid = null;
+	    String url = null;
+	    String title = null;
+	    String pubdate = null;
 	    for (int j = 0; j < il.getLength(); ++j) {
 		Node f = il.item(j);
 		String nn = f.getNodeName();
@@ -126,6 +129,8 @@ class rsshowler {
 		    url = u.getNodeValue();
 		} else if (nn.equals("title")) {
 		    title = f.getTextContent().trim();
+		} else if (nn.equals("pubDate")) {
+		    pubdate = f.getTextContent().trim();
 		}
 	    }
 	    if (guid != null && url != null && title != null)
@@ -133,7 +138,7 @@ class rsshowler {
 		    System.out.println(title + ":guid=" + guid + ":url=" + url + ":feed=" + feed);
 		} else {
 		    if ((flags & 2) == 2 && checkpodcast(guid) == 0)
-			if (dosave(url, feed, flags)) {
+			if (dosave(url, feed, title, pubdate, flags)) {
 			    addpodcast(guid, url, title, feed);
 			} else {
 			    ret = false;
@@ -189,10 +194,27 @@ class rsshowler {
     }
 
     static boolean
-    dosave(String url, String feed, int flags) {
+    dosave(String url, String feed, String title, String pubdate, int flags) {
 	// 8 flag means do not save
 	if ((flags & 8) == 8)
 	    return true;	// true because we're accepting
+	String prefix = "";
+	if ((flags & 64) == 64) {
+	    SimpleDateFormat sdf = new SimpleDateFormat();
+	    Date d = null;
+	    if (pubdate != null) {
+		try {
+		    // try pub date
+		    sdf.applyPattern("EEE, dd MMM yyyy HH:mm:ss Z");
+		    d = sdf.parse(pubdate);
+		} catch (Exception e) {
+		}
+	    }
+	    if (d == null)
+		d = new Date();
+	    sdf.applyPattern("yyMMdd");
+	    prefix = sdf.format(d) + "-";
+	}
 	int q = url.indexOf('?');
 	String f = url;
 	if (q == -1) {
@@ -215,22 +237,34 @@ class rsshowler {
 	File d = new File(feed);
 	if ((flags & 16) != 16)
 	    d.mkdir();
-	File p = new File(d, f);
+	File p = new File(d, prefix + f);
 	if ((flags & 4) == 4 || p.exists()) {
 	    // need to choose a different name
+	    String newf = null;
 	    int e = f.lastIndexOf('.');
+	    String ext = "";
 	    if (e > -1)
-		f = f.substring(e);
-	    else
-		f = "";
-	    f = System.currentTimeMillis() + f;
-	    p = new File(d, f);
+		ext = f.substring(e);
+	    if (title != null) {
+		newf = title.replaceAll("\\W+", "_") + ext;
+		if (newf.length() > 5) {
+		    p = new File(d, prefix + newf);
+		    if (p.exists())
+			newf = null;
+		} else
+		    newf = null;
+	    }
+	    if (newf == null) {
+		newf = prefix + System.currentTimeMillis() + ext;
+	        p = new File(d, newf);
+	    }
 	}
 	System.out.println("file " + p.getPath());
 	try {
 	    HttpURLConnection uc =
 		(HttpURLConnection)new URL(url).openConnection();
 	    uc.setAllowUserInteraction(false);
+	    uc.setInstanceFollowRedirects(false);
 	    if ((flags & 16) == 16)
 		uc.setRequestMethod("HEAD");
 	    uc.setRequestProperty("User-Agent", useragent);
@@ -241,7 +275,8 @@ class rsshowler {
 		String loc = uc.getHeaderField("Location");
 		if (loc != null) {
 		    System.out.println("Location: " + loc);
-		    if (status == 301 && loc.equals(url) == false) {
+		    if (status >= 301 && status <= 399 &&
+			loc.length() > 4 && loc.equals(url) == false) {
 			// guess we have to do this ourselves...
 			uc.disconnect();
 			uc = (HttpURLConnection)new URL(loc).openConnection();
@@ -256,8 +291,12 @@ class rsshowler {
 			    loc = uc.getHeaderField("Location");
 			    if (loc != null)
 				System.out.println("Location: " + loc);
+			    return false;
 			}
 		    }
+		} else {
+		    // redirect without location
+		    return false;
 		}
 	    }
 	    InputStream i = uc.getInputStream();
