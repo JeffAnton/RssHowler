@@ -47,7 +47,8 @@ import org.w3c.dom.NamedNodeMap;
 // create table feeds (rssurl text primary key,
 //			last bigint default 0 not null,
 //			flags smallint default 0 not null,
-//			etag text);
+//			etag text,
+//			since date);
 
 // feed table flags
 //
@@ -73,27 +74,34 @@ class rsshowler {
 
     static DocumentBuilderFactory factory;
     static Connection dbconn;
-    static String useragent = "RssHowler/2.1";
+    static final String useragent = "RssHowler/2.2";
+    static SimpleDateFormat sdf;
 
     public static void
     main(String argv[]) {
+	init();
+
+	for (String s : argv)
+	    doarg(s);
+    }
+
+    static void
+    init() {
 	factory = DocumentBuilderFactory.newInstance();
 	dbconn = null;
+	sdf = new SimpleDateFormat();
 	try {
 	    factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
 	    factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
 	    factory.setXIncludeAware(false);
 	    factory.setExpandEntityReferences(false);
-
-	    for (String s : argv)
-		doarg(s);
 	} catch (ParserConfigurationException e) {
 	    System.out.println("parser configuration problems");
 	}
     }
 
     static boolean
-    workfeed(Element e, int flags) {
+    workfeed(Element e, int flags, Date since) {
 	/*
 	  follow rss/channel/
 	  get feed
@@ -117,7 +125,7 @@ class rsshowler {
 	    String guid = null;
 	    String url = null;
 	    String title = null;
-	    String pubdate = null;
+	    Date dt = null;
 	    for (int j = 0; j < il.getLength(); ++j) {
 		Node f = il.item(j);
 		String nn = f.getNodeName();
@@ -130,15 +138,22 @@ class rsshowler {
 		} else if (nn.equals("title")) {
 		    title = f.getTextContent().trim();
 		} else if (nn.equals("pubDate")) {
-		    pubdate = f.getTextContent().trim();
+		    try {
+			// try pub date
+			String pubdate = f.getTextContent().trim();
+			sdf.applyPattern("EEE, dd MMM yyyy HH:mm:ss Z");
+			dt = sdf.parse(pubdate);
+		    } catch (Exception ex) {
+		    }
 		}
 	    }
-	    if (guid != null && url != null && title != null)
+	    if (guid != null && url != null && title != null &&
+		(since == null || dt == null || since.before(dt)))
 		if (dbconn == null) {
 		    System.out.println(title + ":guid=" + guid + ":url=" + url + ":feed=" + feed);
 		} else {
 		    if ((flags & 2) == 2 && checkpodcast(guid) == 0)
-			if (dosave(url, feed, title, pubdate, flags)) {
+			if (dosave(url, feed, title, dt, flags)) {
 			    addpodcast(guid, url, title, feed);
 			} else {
 			    ret = false;
@@ -194,26 +209,16 @@ class rsshowler {
     }
 
     static boolean
-    dosave(String url, String feed, String title, String pubdate, int flags) {
+    dosave(String url, String feed, String title, Date dt, int flags) {
 	// 8 flag means do not save
 	if ((flags & 8) == 8)
 	    return true;	// true because we're accepting
 	String prefix = "";
 	if ((flags & 64) == 64) {
-	    SimpleDateFormat sdf = new SimpleDateFormat();
-	    Date d = null;
-	    if (pubdate != null) {
-		try {
-		    // try pub date
-		    sdf.applyPattern("EEE, dd MMM yyyy HH:mm:ss Z");
-		    d = sdf.parse(pubdate);
-		} catch (Exception e) {
-		}
-	    }
-	    if (d == null)
-		d = new Date();
+	    if (dt == null)
+		dt = new Date();
 	    sdf.applyPattern("yyMMdd");
-	    prefix = sdf.format(d) + "-";
+	    prefix = sdf.format(dt) + "-";
 	}
 	int q = url.indexOf('?');
 	String f = url;
@@ -371,23 +376,25 @@ class rsshowler {
 		// look for feeds and run them...
 		Statement st = dbconn.createStatement();
 		ResultSet r = st.executeQuery(
-    "select rssurl, last, flags, etag from feeds where flags > 0 order by 1");
+    "select rssurl, last, flags, etag, since from feeds where flags > 0 order by 1");
 		while (r.next()) {
 		    long now = System.currentTimeMillis();
 		    dofetch(r.getString(1), r.getLong(2), r.getShort(3),
-			now, r.getString(4));
+			    now, r.getString(4), r.getDate(5));
 		}
 		st.close();
+		dbconn.close();
+		dbconn = null;
 	    } catch (SQLException e) {
 		System.out.println("Database connection problems " + e.getMessage());
 	    }
 	} else {
-	    dofetch(arg, 0, 1, 0, null);
+	    dofetch(arg, 0, 1, 0, null, null);
 	}
     }
 
     static int
-    dofetch(String arg, long t, int flags, long n, String etag) {
+    dofetch(String arg, long lasttime, int flags, long n, String etag, Date since) {
 	System.out.println("dofetch " + arg);
 	int ret = 1;
 	try {
@@ -398,8 +405,8 @@ class rsshowler {
 	    if ((flags & 32) != 32) {
 		if (etag != null) {
 		    uc.setRequestProperty("If-None-Match", etag);
-		} else if (t > 0) {
-		    uc.setIfModifiedSince(t);
+		} else if (lasttime > 0) {
+		    uc.setIfModifiedSince(lasttime);
 		}
 	    }
 	    uc.setRequestProperty("User-Agent", useragent);
@@ -409,11 +416,13 @@ class rsshowler {
 	    if (status == 200) {
 		Element doc =
 		    builder.parse(uc.getInputStream()).getDocumentElement();
-		if (workfeed(doc, flags))
+		if (workfeed(doc, flags, since))
 		    ret = 0;
-	    } else if (status == 410 || status == 404) {
+	    } else if (status == 404) {
+		System.out.println("Status: 404 - Feed might be dead");
+	    } else if (status == 410) {
 		// feed is dead... clear flags
-		System.out.println("Status: " + status + " FEED IS DEAD");
+		System.out.println("Status: 410 FEED IS DEAD");
 		deadfeed(arg);
 	    } else {
 		System.out.println("Status: " + status);
@@ -424,7 +433,7 @@ class rsshowler {
 			// feed is moved...
 			System.out.println("FEED MOVED");
 			movefeed(arg, loc);
-			return dofetch(loc, t, flags, n, etag);
+			return dofetch(loc, lasttime, flags, n, etag, since);
 		    }
 		}
 	    }
