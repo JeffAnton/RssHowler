@@ -1,5 +1,5 @@
 import java.net.MalformedURLException;
-import java.net.URL;
+import java.net.URI;
 import java.net.URLConnection;
 import java.net.HttpURLConnection;
 import java.io.InputStream;
@@ -43,12 +43,14 @@ import org.w3c.dom.NamedNodeMap;
 // an rss url will just read the feed and try to parse it
 
 // Schema setup...
-// create table podcasts (guid text primary key, url text, title text, feed text);
+// create table podcasts (guid text primary key, url text, title text,
+//			  feed text, download timestamp);
 // create table feeds (rssurl text primary key,
 //			last bigint default 0 not null,
 //			flags smallint default 0 not null,
 //			etag text,
-//			since date);
+//			since date,
+//			title text);
 
 // feed table flags
 //
@@ -74,7 +76,7 @@ class rsshowler {
 
     static DocumentBuilderFactory factory;
     static Connection dbconn;
-    static final String useragent = "RssHowler/2.2";
+    static final String useragent = "RssHowler/2.3";
     static SimpleDateFormat sdf;
 
     public static void
@@ -100,7 +102,7 @@ class rsshowler {
 	}
     }
 
-    static boolean
+    static String
     workfeed(Element e, int flags, Date since) {
 	/*
 	  follow rss/channel/
@@ -114,7 +116,6 @@ class rsshowler {
 	reporttag(e, "ttl");
 	reporttag(e, "skipDays");
 	reporttag(e, "skipHours");
-	boolean ret = true;
 	NodeList tlist = e.getElementsByTagName("title");
 	String feed = tlist.item(0).getTextContent().trim();
 	System.out.println("Scaning feed " + feed);
@@ -152,15 +153,13 @@ class rsshowler {
 		if (dbconn == null) {
 		    System.out.println(title + ":guid=" + guid + ":url=" + url + ":feed=" + feed);
 		} else {
-		    if ((flags & 2) == 2 && checkpodcast(guid) == 0)
-			if (dosave(url, feed, title, dt, flags)) {
-			    addpodcast(guid, url, title, feed);
-			} else {
-			    ret = false;
-			}
+		    if ((flags & 2) == 2 &&
+			checkpodcast(guid) == 0 &&
+			dosave(url, feed, title, dt, flags))
+			addpodcast(guid, url, title, feed);
 		}
 	}
-	return ret;
+	return feed;
     }
 
     static void
@@ -174,7 +173,7 @@ class rsshowler {
     addpodcast(String guid, String url, String title, String feed) {
 	try {
 	    PreparedStatement st = dbconn.prepareStatement(
-		"insert into podcasts values (?,?,?,?)");
+		"insert into podcasts values (?,?,?,?,now())");
 	    st.setString(1, guid);
 	    st.setString(2, url);
 	    st.setString(3, title);
@@ -267,7 +266,7 @@ class rsshowler {
 	System.out.println("file " + p.getPath());
 	try {
 	    HttpURLConnection uc =
-		(HttpURLConnection)new URL(url).openConnection();
+		(HttpURLConnection)(new URI(url)).toURL().openConnection();
 	    uc.setAllowUserInteraction(false);
 	    uc.setInstanceFollowRedirects(false);
 	    if ((flags & 16) == 16)
@@ -284,7 +283,7 @@ class rsshowler {
 			loc.length() > 4 && loc.equals(url) == false) {
 			// guess we have to do this ourselves...
 			uc.disconnect();
-			uc = (HttpURLConnection)new URL(loc).openConnection();
+			uc = (HttpURLConnection)(new URI(loc)).toURL().openConnection();
 			uc.setAllowUserInteraction(false);
 			if ((flags & 16) == 16)
 			    uc.setRequestMethod("HEAD");
@@ -322,16 +321,17 @@ class rsshowler {
     }
 
     static void
-    updatelast(String url, long t, String etag) {
+    updatelast(String url, String feed, long t, String etag) {
 	try {
-	    String up = "update feeds set last = ?, etag = ? where rssurl = ?";
+	    String up = "update feeds set last = ?, etag = ?, title = ? where rssurl = ?";
 	    PreparedStatement st = dbconn.prepareStatement(up);
 	    st.setLong(1, t);
 	    st.setString(2, etag);
-	    st.setString(3, url);
+	    st.setString(3, feed);
+	    st.setString(4, url);
 	    int r = st.executeUpdate();
 	    st.close();
-	    System.out.println("updated feed " + url + " at time " + t);
+	    System.out.println("updated feed " + feed + " at time " + t);
 	} catch (SQLException e) {
 	    System.out.println("update feed fail " + e.getMessage());
 	}
@@ -393,14 +393,14 @@ class rsshowler {
 	}
     }
 
-    static int
+    static void
     dofetch(String arg, long lasttime, int flags, long n, String etag, Date since) {
 	System.out.println("dofetch " + arg);
-	int ret = 1;
+	String feed = null;
 	try {
 	    DocumentBuilder builder = factory.newDocumentBuilder();
 	    HttpURLConnection uc =
-		(HttpURLConnection)new URL(arg).openConnection();
+		(HttpURLConnection)(new URI(arg)).toURL().openConnection();
 	    uc.setInstanceFollowRedirects(false);
 	    if ((flags & 32) != 32) {
 		if (etag != null) {
@@ -416,8 +416,7 @@ class rsshowler {
 	    if (status == 200) {
 		Element doc =
 		    builder.parse(uc.getInputStream()).getDocumentElement();
-		if (workfeed(doc, flags, since))
-		    ret = 0;
+		feed = workfeed(doc, flags, since);
 	    } else if (status == 404) {
 		System.out.println("Status: 404 - Feed might be dead");
 	    } else if (status == 410) {
@@ -433,7 +432,8 @@ class rsshowler {
 			// feed is moved...
 			System.out.println("FEED MOVED");
 			movefeed(arg, loc);
-			return dofetch(loc, lasttime, flags, n, etag, since);
+			dofetch(loc, lasttime, flags, n, etag, since);
+			return;
 		    }
 		}
 	    }
@@ -446,8 +446,8 @@ class rsshowler {
 	    l = uc.getHeaderField("ETag");
 	    if (l != null)
 		System.out.println("ETag " + l);
-	    if (ret == 0 && n > 0)
-		updatelast(arg, n, l);
+	    if (feed != null && n > 0)
+		updatelast(arg, feed, n, l);
 	} catch (MalformedURLException e) {
 	    System.out.println("Bad URL Form:" + arg);
 	} catch (IOException i) {
@@ -455,6 +455,5 @@ class rsshowler {
 	} catch (Exception ex) {
 	    ex.printStackTrace();
 	}
-	return ret;
     }
 }
