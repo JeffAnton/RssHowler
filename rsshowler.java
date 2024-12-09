@@ -15,6 +15,7 @@ import java.sql.SQLException;
 import java.sql.ResultSet;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
+import java.security.MessageDigest;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
@@ -43,8 +44,10 @@ import org.w3c.dom.NamedNodeMap;
 // an rss url will just read the feed and try to parse it
 
 // Schema setup...
-// create table podcasts (guid text primary key, url text, title text,
-//			  feed text, download timestamp);
+// create table podcasts (guid text primary key,
+//			   url text, title text,
+//			  feed text, download timestamp,
+//			  size bigint, digest bytea );
 // create table feeds (rssurl text primary key,
 //			last bigint default 0 not null,
 //			flags smallint default 0 not null,
@@ -76,7 +79,7 @@ class rsshowler {
 
     static DocumentBuilderFactory factory;
     static Connection dbconn;
-    static final String useragent = "RssHowler/2.3";
+    static final String useragent = "RssHowler/2.4";
     static SimpleDateFormat sdf;
 
     public static void
@@ -120,6 +123,7 @@ class rsshowler {
 	String feed = tlist.item(0).getTextContent().trim();
 	System.out.println("Scaning feed " + feed);
 	NodeList items = e.getElementsByTagName("item");
+	boolean good = true;
 	for (int i = 0; i < items.getLength(); ++i) {
 	    Node item = items.item(i);
 	    NodeList il = item.getChildNodes();
@@ -154,11 +158,12 @@ class rsshowler {
 		    System.out.println(title + ":guid=" + guid + ":url=" + url + ":feed=" + feed);
 		} else {
 		    if ((flags & 2) == 2 &&
-			checkpodcast(guid) == 0 &&
-			dosave(url, feed, title, dt, flags))
-			addpodcast(guid, url, title, feed);
+			checkpodcast(guid) == 0)
+			good = good && dosave(url, feed, title, dt, flags, guid);
 		}
 	}
+	if (good == false)
+	    feed = null;
 	return feed;
     }
 
@@ -170,14 +175,16 @@ class rsshowler {
     }
 
     static int
-    addpodcast(String guid, String url, String title, String feed) {
+    addpodcast(String guid, String url, String title, String feed, long sz, byte[] dig) {
 	try {
 	    PreparedStatement st = dbconn.prepareStatement(
-		"insert into podcasts values (?,?,?,?,now())");
+		"insert into podcasts values (?,?,?,?,now(),?,?)");
 	    st.setString(1, guid);
 	    st.setString(2, url);
 	    st.setString(3, title);
 	    st.setString(4, feed);
+	    st.setLong(5, sz);
+	    st.setBytes(6, dig);
 	    int r = st.executeUpdate();
 	    System.out.println(r + " row updated");
 	    st.close();
@@ -208,7 +215,8 @@ class rsshowler {
     }
 
     static boolean
-    dosave(String url, String feed, String title, Date dt, int flags) {
+    dosave(String url, String feed, String title, Date dt, int flags,
+	   String guid) {
 	// 8 flag means do not save
 	if ((flags & 8) == 8)
 	    return true;	// true because we're accepting
@@ -304,15 +312,24 @@ class rsshowler {
 		}
 	    }
 	    InputStream i = uc.getInputStream();
+	    long sz = 0;
+	    MessageDigest md = null;
+	    byte[] b = null;
 	    if ((flags & 16) == 0) {
 		OutputStream o = new FileOutputStream(p);
-		byte[] b = new byte[20480];
+		b = new byte[20480];
+		md = MessageDigest.getInstance("SHA-256");
 		int br;
-		while ((br = i.read(b)) > 0)
+		while ((br = i.read(b)) > 0) {
 		    o.write(b, 0, br);
+		    md.update(b, 0, br);
+		    sz += br;
+		}
 		o.close();
+		b = md.digest();
 	    }
 	    i.close();
+	    addpodcast(guid, url, title, feed, sz, b);
 	    return true;
 	} catch (Exception e) {
 	    e.printStackTrace();
