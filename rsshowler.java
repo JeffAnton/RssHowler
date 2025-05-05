@@ -1,36 +1,34 @@
-import java.net.MalformedURLException;
-import java.net.URI;
-import java.net.URLConnection;
-import java.net.HttpURLConnection;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.text.SimpleDateFormat;
-import java.util.Date;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.security.MessageDigest;
 import java.sql.Connection;
 import java.sql.DriverManager;
-import java.sql.SQLException;
-import java.sql.ResultSet;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Statement;
-import java.security.MessageDigest;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
-import org.w3c.dom.Document;
 import org.w3c.dom.Element;
-import org.w3c.dom.NodeList;
-import org.w3c.dom.Node;
 import org.w3c.dom.NamedNodeMap;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
 
 //
 // RssHowler
 //
 // A simple database driven podcast downloader
 //
-// Copyright 2022, 2024 Jeff Anton
+// Copyright 2022, 2025 Jeff Anton
 // See LICENSE file
 // Check github.com for JeffAnton/RssHowler
 
@@ -79,8 +77,9 @@ class rsshowler {
 
     static DocumentBuilderFactory factory;
     static Connection dbconn;
-    static final String useragent = "RssHowler/2.4";
+    static final String useragent = "RssHowler/2.5";
     static SimpleDateFormat sdf;
+    static PreparedStatement checkst;
 
     public static void
     main(String argv[]) {
@@ -94,6 +93,7 @@ class rsshowler {
     init() {
 	factory = DocumentBuilderFactory.newInstance();
 	dbconn = null;
+	checkst = null;
 	sdf = new SimpleDateFormat();
 	try {
 	    factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
@@ -134,15 +134,19 @@ class rsshowler {
 	    for (int j = 0; j < il.getLength(); ++j) {
 		Node f = il.item(j);
 		String nn = f.getNodeName();
-		if (nn.equals("guid")) {
+		switch (nn) {
+		case "guid":
 		    guid = f.getTextContent().trim();
-		} else if (nn.equals("enclosure")) {
+		    break;
+		case "enclosure":
 		    NamedNodeMap n = f.getAttributes();
 		    Node u = n.getNamedItem("url");
 		    url = u.getNodeValue();
-		} else if (nn.equals("title")) {
+		    break;
+		case "title":
 		    title = f.getTextContent().trim();
-		} else if (nn.equals("pubDate")) {
+		    break;
+		case "pubDate":
 		    try {
 			// try pub date
 			String pubdate = f.getTextContent().trim();
@@ -150,6 +154,8 @@ class rsshowler {
 			dt = sdf.parse(pubdate);
 		    } catch (Exception ex) {
 		    }
+		default:
+		    break;
 		}
 	    }
 	    if (guid != null && url != null && title != null &&
@@ -201,13 +207,13 @@ class rsshowler {
     checkpodcast(String guid) {
 	int c = 0;
 	try {
-	    PreparedStatement st = dbconn.prepareStatement(
-		"select count(*) from podcasts where guid = ?");
-	    st.setString(1, guid);
-	    ResultSet r = st.executeQuery();
+	    if (checkst == null)
+		checkst = dbconn.prepareStatement(
+		    "select count(*) from podcasts where guid = ?");
+	    checkst.setString(1, guid);
+	    ResultSet r = checkst.executeQuery();
 	    while (r.next())
 		c = r.getInt(1);
-	    st.close();
 	} catch (SQLException e) {
 	    System.out.println("check count failed");
 	}
@@ -228,7 +234,7 @@ class rsshowler {
 	    prefix = sdf.format(dt) + "-";
 	}
 	int q = url.indexOf('?');
-	String f = url;
+	String f;
 	if (q == -1) {
 	    int s = url.lastIndexOf('/');
 	    f = url.substring(s+1);
@@ -313,7 +319,7 @@ class rsshowler {
 	    }
 	    InputStream i = uc.getInputStream();
 	    long sz = 0;
-	    MessageDigest md = null;
+	    MessageDigest md;
 	    byte[] b = null;
 	    if ((flags & 16) == 0) {
 		OutputStream o = new FileOutputStream(p);
@@ -346,7 +352,7 @@ class rsshowler {
 	    st.setString(2, etag);
 	    st.setString(3, feed);
 	    st.setString(4, url);
-	    int r = st.executeUpdate();
+	    st.executeUpdate();
 	    st.close();
 	    System.out.println("updated feed " + feed + " at time " + t);
 	} catch (SQLException e) {
@@ -360,7 +366,7 @@ class rsshowler {
 	    String up = "update feeds set flags = 0 where rssurl = ?";
 	    PreparedStatement st = dbconn.prepareStatement(up);
 	    st.setString(1, url);
-	    int r = st.executeUpdate();
+	    st.executeUpdate();
 	    st.close();
 	    System.out.println("dead feed " + url);
 	} catch (SQLException e) {
@@ -375,7 +381,7 @@ class rsshowler {
 	    PreparedStatement st = dbconn.prepareStatement(up);
 	    st.setString(1, newurl);
 	    st.setString(2, url);
-	    int r = st.executeUpdate();
+	    st.executeUpdate();
 	    st.close();
 	    System.out.println("move feed " + url + " to " + newurl);
 	} catch (SQLException e) {
@@ -400,6 +406,10 @@ class rsshowler {
 			    now, r.getString(4), r.getDate(5));
 		}
 		st.close();
+		if (checkst != null) {
+		    checkst.close();
+		    checkst = null;
+		}
 		dbconn.close();
 		dbconn = null;
 	    } catch (SQLException e) {
@@ -430,17 +440,20 @@ class rsshowler {
 	    uc.setAllowUserInteraction(false);
 	    uc.connect();
 	    int status = uc.getResponseCode();
-	    if (status == 200) {
+	    switch (status) {
+	    case 200:
 		Element doc =
 		    builder.parse(uc.getInputStream()).getDocumentElement();
 		feed = workfeed(doc, flags, since);
-	    } else if (status == 404) {
+		break;
+	    case 404:
 		System.out.println("Status: 404 - Feed might be dead");
-	    } else if (status == 410) {
-		// feed is dead... clear flags
+	    	break;
+	    case 410:		// feed is dead... clear flags
 		System.out.println("Status: 410 FEED IS DEAD");
 		deadfeed(arg);
-	    } else {
+	        break;
+	    default:
 		System.out.println("Status: " + status);
 		String loc = uc.getHeaderField("Location");
 		if (loc != null && loc.equals(arg) == false) {
