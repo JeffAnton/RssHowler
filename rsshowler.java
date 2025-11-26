@@ -77,7 +77,7 @@ class rsshowler {
 
     static DocumentBuilderFactory factory;
     static Connection dbconn;
-    static final String useragent = "RssHowler/2.5";
+    static final String useragent = "RssHowler/2.7";
     static SimpleDateFormat sdf;
     static PreparedStatement checkst;
 
@@ -106,7 +106,7 @@ class rsshowler {
     }
 
     static String
-    workfeed(Element e, int flags, Date since) {
+    workfeed(Element e, int flags, Date since, long lasttime) {
 	/*
 	  follow rss/channel/
 	  get feed
@@ -124,6 +124,9 @@ class rsshowler {
 	System.out.println("Scaning feed " + feed);
 	NodeList items = e.getElementsByTagName("item");
 	boolean good = true;
+	Date lastdate = null;
+	if (lasttime > 0)
+	    lastdate = new Date(lasttime);
 	for (int i = 0; i < items.getLength(); ++i) {
 	    Node item = items.item(i);
 	    NodeList il = item.getChildNodes();
@@ -159,7 +162,9 @@ class rsshowler {
 		}
 	    }
 	    if (guid != null && url != null && title != null &&
-		(since == null || dt == null || since.before(dt)))
+		(since == null || dt == null || since.before(dt))) {
+		if (dt != null && lastdate != null && dt.after(lastdate))
+		    System.out.println(title + " is newer");
 		if (dbconn == null) {
 		    System.out.println(title + ":guid=" + guid + ":url=" + url + ":feed=" + feed);
 		} else {
@@ -167,6 +172,7 @@ class rsshowler {
 			checkpodcast(guid) == 0)
 			good = good && dosave(url, feed, title, dt, flags, guid);
 		}
+	    }
 	}
 	if (good == false)
 	    feed = null;
@@ -332,6 +338,7 @@ class rsshowler {
 		    sz += br;
 		}
 		o.close();
+		p.setLastModified(dt.getTime());
 		b = md.digest();
 	    }
 	    i.close();
@@ -444,7 +451,7 @@ class rsshowler {
 	    case 200:
 		Element doc =
 		    builder.parse(uc.getInputStream()).getDocumentElement();
-		feed = workfeed(doc, flags, since);
+		feed = workfeed(doc, flags, since, lasttime);
 		break;
 	    case 404:
 		System.out.println("Status: 404 - Feed might be dead");
